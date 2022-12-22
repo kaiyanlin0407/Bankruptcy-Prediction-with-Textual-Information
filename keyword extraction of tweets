@@ -1,0 +1,175 @@
+#The code ran on colab.
+from google.colab import drive
+drive.mount('/content/drive')
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+
+#install transformers
+!pip install git+https://github.com/huggingface/transformers
+!pip install nltk
+import torch
+import tensorflow as tf
+import transformers
+from transformers import BertTokenizer
+from sklearn import decomposition, ensemble
+from sklearn import model_selection, preprocessing, linear_model, naive_bayes, metrics, svm
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+import nltk
+nltk.download('punkt')
+from nltk import sent_tokenize, word_tokenize 
+from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+porter_stemmer=PorterStemmer()
+nltk.download('wordnet')
+lemmatizer = WordNetLemmatizer()
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+stopWords = set(stopwords.words("english"))
+nltk.download('omw-1.4')
+
+import pandas as pd
+import zipfile
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+##translator
+def translator(user_string):
+    user_string = user_string.split(" ")
+    j = 0
+    for _str in user_string:
+        # File path which consists of Abbreviations.
+        fileName = "/content/drive/My Drive/data/slang.txt"
+        # File Access mode [Read Mode]
+        accessMode = "r"
+        with open(fileName, accessMode) as myCSVfile:
+            # Reading file as CSV with delimiter as "=", so that abbreviation are stored in row[0] and phrases in row[1]
+            dataFromFile = csv.reader(myCSVfile, delimiter="=")
+            # Removing Special Characters.
+            _str = re.sub('[^a-zA-Z0-9-_.]', '', _str)
+            for row in dataFromFile:
+                # Check if selected word matches short forms[LHS] in text file.
+                if _str.upper() == row[0]:
+                    # If match found replace it with its appropriate phrase in text file.
+                    user_string[j] = row[1]
+            myCSVfile.close()
+        j = j + 1
+    new_string= ' '.join(user_string)
+    return new_string
+
+##clean the data
+def clean_txt(text):
+    #lowercase
+    #text = text.lower()
+    #lemmatized #stemmed
+    text = text.split()
+    s = [lemmatizer.lemmatize(word=word,pos='v') for word in text]
+    s = [porter_stemmer.stem(word=word) for word in s]
+    str1 = " "  
+    text = str1.join(s)
+       
+    # remove html markup
+    text=re.sub("(<.*?>)","",text)
+   
+    #remove non-ascii and digits
+    text=re.sub("(\\W|\\d)"," ",text)
+    
+    #remove whitespace
+    text=text.strip()
+    return text
+    
+def calculateTFIDF(corpus, topN):
+    tfidf = TfidfVectorizer()
+    x = tfidf.fit_transform(corpus)
+    feature_array =np.array(tfidf.get_feature_names_out())
+    tfidfsort = np.argsort(x.toarray()).flatten()[::-1]
+    top_n = feature_array[tfidfsort][:topN]
+    top_n = " ".join(top_n)
+    return top_n # return keywords
+    
+def get_word_embedding(text):
+    text = text.lower()
+    # Add the special tokens
+    max_seq = 512
+    tokenized_text = tokenizer.tokenize(text)
+    if len(tokenized_text)>= max_seq-2:
+        marked_text = ['[CLS]'] + tokenized_text[:max_seq-2] + ['[SEP]']
+    else:
+        marked_text = ['[CLS]'] + tokenized_text + ['[SEP]'] 
+    indexed_tokens = tokenizer.convert_tokens_to_ids(marked_text)
+    # Mark each of the tokens as belonging to sentence "1".
+    segments_ids = [1] * len(marked_text)
+    tokens_tensor = torch.tensor([indexed_tokens])
+    segments_tensors = torch.tensor([segments_ids])
+    # Predict hidden states features for each layer
+    with torch.no_grad():
+        o = sen_model(tokens_tensor, segments_tensors, output_hidden_states=True) #encoded_layers, _
+    # `token_vecs` is a tensor with shape [number of tokens x 768]
+    token_vecs = o.hidden_states[-1] + o.hidden_states[1]
+    #print(token_vecs.shape)
+    #Calculate the mean of all token vectors.
+    word_embedding = torch.mean(torch.squeeze(token_vecs), dim=0)
+    print(word_embedding.shape)
+    return word_embedding
+
+def sic_sec(sic):
+  if 3999>=sic>=2000:
+      item = 1 #manufacturing
+  elif 4999>=sic>=4000:
+      item = 2 #Transportation, Communications,Electric,Gas and Sanitary
+  elif 5199>=sic>=5000:
+      item = 3 #wholesale trade
+  elif 5999>=sic>=5200:
+      item = 4 #retail trade
+  elif 6799>=sic>=6000:
+      item = 5 #Finance,Insurance and real estate trade
+  else:
+      item = 6 #non classifiable
+  return item
+#####################################################################################################################  
+zf = zipfile.ZipFile("/content/drive/My Drive/data/sic.zip") 
+DDF = pd.read_csv(zf.open('sic.csv'))
+DDF = DDF.drop_duplicates(subset=['cik'],keep='last')
+DDF = pd.DataFrame(DDF, columns=['cik','sic'])
+DDF.loc[DDF.shape[0]]={'cik':1705771,'sic':5990} #X_test[~X_test['cik'].isin(DDF['cik'])]
+DDF.loc[DDF.shape[0]]={'cik':1698530,'sic':2834}
+DDF.loc[DDF.shape[0]]={'cik':1517498,'sic':5122}
+DDF['sic']=DDF['sic'].apply(sic_sec)
+
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUMtw_X_test_2021June.zip") 
+X_test = pd.read_csv(zf.open('NUMtw_X_test_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUMtw_X_train_2021June.zip") 
+X_train = pd.read_csv(zf.open('NUMtw_X_train_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUMtw_y_train_2021June.zip") 
+y_train = pd.read_csv(zf.open('NUMtw_y_train_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUMtw_y_test_2021June.zip") 
+y_test = pd.read_csv(zf.open('NUMtw_y_test_2021June.csv'))
+
+#cleaning tweets data
+X_train['summary']= X_train['summary'].apply(lambda x: translator(x))
+X_test['summary']= X_test['summary'].apply(lambda x: translator(x)) 
+X_train['summary']= X_train['summary'].apply(lambda x: clean_txt(x))
+X_test['summary']= X_test['summary'].apply(lambda x: clean_txt(x))
+
+#an example about how keyword extraction applied to tweets data
+RF_text = []
+topN = 25
+sum_dic={}
+count = 0
+
+for text in X_test['summary']:
+ 
+    print(count)
+    sum_dic['cik'] = X_test['cik'].loc[count]
+    text = translator(text)
+    text = clean_txt(text)
+    sentences = sent_tokenize(text)
+    TOPN_WORDS = calculateTFIDF(sentences, topN)
+    TOPN_WORDS = TOPN_WORDS.lower()
+    ##get word vector representation from bert
+    embedding = get_word_embedding(TOPN_WORDS)
+    sum_dic['RF_summary'] = embedding
+    c = {}
+    c.update(sum_dic)
+    RF_text.append(c)
+    count = count + 1
+X_test_emb = pd.DataFrame(RF_text)    
+X_combined_test = ad_array_text(X_test_emb['RF_summary'])

@@ -1,0 +1,580 @@
+#The code ran on Colab.
+from google.colab import drive
+drive.mount('/content/drive')
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+
+#install transformers
+!pip install git+https://github.com/huggingface/transformers
+!pip install nltk
+
+import pandas as pd
+import numpy as np
+np.random.seed(1234)
+import sklearn
+from sklearn import model_selection
+import torch
+import logging
+import time
+import string 
+import datetime
+import csv
+import re
+import math
+import zipfile
+import pickle
+import random
+from platform import python_version
+import matplotlib
+import matplotlib.pyplot as plt
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+import keras
+from keras import layers, models, optimizers,Sequential
+from tensorflow.keras.utils import Sequence
+from tensorflow.keras.layers import BatchNormalization
+from keras.utils import np_utils
+ffrom keras.layers import Embedding, Dense, Input, concatenate, Layer, Lambda, Dropout, Activation
+from keras.callbacks import ModelCheckpoint, EarlyStopping, Callback, TensorBoard
+
+
+## create batches and data excluding the batches
+def random_mini_batches_1(XE, R1E, mini_batch_size = 3, seed = 42): 
+    # Creating the mini-batches
+    np.random.seed(seed)            
+    m = XE.shape[0]                  
+    mini_batches = []
+    x_excludes = []
+    permutation = list(np.random.permutation(m))
+    shuffled_XE = XE[permutation,:]
+    
+    shuffled_X1R = R1E[permutation]
+    #shuffled_X2R = R2E[permutation]
+    num_complete_minibatches = math.floor(m/mini_batch_size)
+    for k in range(0, int(num_complete_minibatches)):
+        mini_batch_XE = shuffled_XE[k * mini_batch_size : (k+1) * mini_batch_size, :]
+       
+        x_exclude = torch.cat((shuffled_XE[:k * mini_batch_size,:],shuffled_XE[(k+1) * mini_batch_size:,:]))
+        
+        mini_batch_X1R = shuffled_X1R[k * mini_batch_size : (k+1) * mini_batch_size]
+        #mini_batch_X2R = shuffled_X2R[k * mini_batch_size : (k+1) * mini_batch_size]
+        mini_batch = (mini_batch_XE, mini_batch_X1R)#, mini_batch_X2R
+        mini_batches.append(mini_batch)
+
+        x_excludes.append( x_exclude )
+    Lower = int(num_complete_minibatches * mini_batch_size)
+    Upper = int(m - (mini_batch_size * math.floor(m/mini_batch_size)))
+    
+    if m % mini_batch_size != 0:
+        mini_batch_XE = shuffled_XE[Lower : Lower + Upper, :]
+        x_exclude = torch.cat((shuffled_XE[:Lower,:],shuffled_XE[Lower + Upper:,:]))
+
+        mini_batch_X1R = shuffled_X1R[Lower : Lower + Upper]
+       # mini_batch_X2R = shuffled_X2R[Lower : Lower + Upper]
+        mini_batch = (mini_batch_XE, mini_batch_X1R) #, mini_batch_X2R
+        mini_batches.append(mini_batch)
+
+        x_excludes.append( x_exclude )
+
+    return mini_batches,permutation,x_excludes
+    
+##create batches given permutation
+def random_mini_batches_2(XE, R1E, perm, mini_batch_size = 3, seed = 42): 
+    # Creating the mini-batches
+    np.random.seed(seed)            
+    m = XE.shape[0]                  
+    mini_batches = []
+    permutation = perm
+    
+    shuffled_XE = XE[permutation,:]
+    shuffled_X1R = R1E[permutation]
+    #shuffled_X2R = R2E[permutation]
+    num_complete_minibatches = math.floor(m/mini_batch_size)
+    for k in range(0, int(num_complete_minibatches)):
+        mini_batch_XE = shuffled_XE[k * mini_batch_size : (k+1) * mini_batch_size, :]
+        mini_batch_X1R = shuffled_X1R[k * mini_batch_size : (k+1) * mini_batch_size]
+       # mini_batch_X2R = shuffled_X2R[k * mini_batch_size : (k+1) * mini_batch_size]
+        mini_batch = (mini_batch_XE, mini_batch_X1R)#, mini_batch_X2R
+        mini_batches.append(mini_batch)
+    Lower = int(num_complete_minibatches * mini_batch_size)
+    Upper = int(m - (mini_batch_size * math.floor(m/mini_batch_size)))
+    if m % mini_batch_size != 0:
+        mini_batch_XE = shuffled_XE[Lower : Lower + Upper, :]
+        mini_batch_X1R = shuffled_X1R[Lower : Lower + Upper]
+        #mini_batch_X2R = shuffled_X2R[Lower : Lower + Upper]
+        mini_batch = (mini_batch_XE, mini_batch_X1R)#, mini_batch_X2R
+        mini_batches.append(mini_batch)
+    
+    return mini_batches
+    
+def random_sample(XE, mini_batch_size = 3, seed = 42): 
+    # Creating the mini-batches
+    np.random.seed(seed)            
+    m = XE.shape[0]                  
+    mini_batches = []
+
+    permutation = list(np.random.permutation(m))
+
+    shuffled_XE = XE[permutation,:]
+    
+    num_complete_minibatches = math.floor(m/mini_batch_size)
+    for k in range(0, int(num_complete_minibatches)):
+        mini_batch_XE = shuffled_XE[k * mini_batch_size : (k+1) * mini_batch_size, :]
+        
+        mini_batch = mini_batch_XE
+        mini_batches.append(mini_batch)
+    Lower = int(num_complete_minibatches * mini_batch_size)
+    Upper = int(m - (mini_batch_size * math.floor(m/mini_batch_size)))
+    if m % mini_batch_size != 0:
+        mini_batch_XE = shuffled_XE[Lower : Lower + Upper, :]
+        mini_batch = mini_batch_XE
+        mini_batches.append(mini_batch)
+    
+    return mini_batches
+
+##genearator and discriminator of NumText_CGAN
+class Generator(nn.Module):
+    def __init__(self):
+        super(Generator, self).__init__()
+        Z_dim = noise_size+condition_size#kernel_num*len(kernel_sizes) #noise is of length 10, textual data is of  80
+        X_dim = int(initial_size)
+        y_dim = 1
+        self.main = nn.Sequential(nn.Linear(Z_dim, X_dim),nn.Tanh())
+        
+    def forward(self, x1, x2): #x1: sentence embeddings x2: numerical data
+          x_combined = torch.cat((x2,x1),dim=1) # numerical data is located above textul data 
+          output = self.main(x_combined)
+          return output
+
+class Extractor(nn.Module):
+    def __init__(self):
+        super(Extractor, self).__init__()
+        Z1_dim = 40 #number of features of numerical data
+        h1_dim = int(numerical_size/4) 
+        h22_dim = int(numerical_size/2)
+        out_dim = int(numerical_size)
+        X2_dim = int(numerical_size/2)
+        X3_dim = int(numerical_size/4)
+        X4_dim = 40
+        
+        self.extractor = nn.Sequential(nn.Linear(Z1_dim, h1_dim),nn.ReLU(),nn.Linear(h1_dim, h22_dim),nn.ReLU(),nn.Linear(out_dim, X2_dim),nn.ReLU(),nn.Linear(X2_dim, X3_dim),nn.ReLU(),nn.Linear(X3_dim, X4_dim),nn.ReLU())   #,nn.BatchNorm1d(h22_dim)    
+        
+    def forward(self, input_pre): # condition: sentence embeddings #input_pre: numerical data             
+        out = self.extractor(input_pre)    
+        return out
+       
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super(Discriminator, self).__init__()
+        
+        X_dim = condition_size+initial_size #40 + kernel_num*len(kernel_sizes)#120 #40+ size of textual
+        h_dim = 128
+        #h1_dim = 64
+        h2_dim = 32
+        y_dim = 1 
+        
+        self.shared = nn.Sequential(nn.Linear(X_dim, h_dim),nn.BatchNorm1d(h_dim),nn.LeakyReLU(),nn.Linear(h_dim, h2_dim),nn.BatchNorm1d(h2_dim),nn.LeakyReLU())#ReLU(),nn.Linear(h1_dim, h2_dim),nn.ReLU()
+        # Discriminator net one: For Gan_loss
+        self.D_gan = nn.Linear(h2_dim, 1)
+        # Discriminator net two: For cls loss
+        self.D_aux = nn.Linear(h2_dim, y_dim)
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, condition, input_pre): # condition: sentence embeddings #input_pre: numerical data
+        input = torch.cat((input_pre, condition), dim =1)
+        h = self.shared(input)
+        logits1 = self.D_gan(h)
+        logits2 = self.D_aux(h)
+        out1 = self.sigmoid(logits1)
+        out2 = self.sigmoid(logits2)
+        return out1, out2
+        
+##autoencoder of NumText_CGAN
+class AE_wide(nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.encoder_hidden_layer_1 = nn.Linear(
+            in_features=kwargs["input_shape"], out_features=64
+        )
+        self.encoder_hidden_layer_2 = nn.Linear(
+            in_features=64, out_features=128
+        )
+        self.encoder_output_layer_3 = nn.Linear(
+            in_features=128, out_features=numerical_size
+        )
+        self.decoder_hidden_layer_1 = nn.Linear(
+            in_features=numerical_size, out_features=128
+        )
+        self.decoder_hidden_layer_2 = nn.Linear(
+            in_features=128, out_features=64
+        )
+        self.decoder_output_layer_3 = nn.Linear(
+            in_features=64, out_features=kwargs["input_shape"]
+        )
+
+    def forward(self, features):
+        activation = self.encoder_hidden_layer_1(features)
+        activation = torch.relu(activation)
+        activation = self.encoder_hidden_layer_2(activation)
+        activation = torch.relu(activation)
+        code = self.encoder_output_layer_3(activation)
+        code_Y = torch.relu(code)
+        
+        activation = self.decoder_hidden_layer_1(code_Y)
+        activation = torch.relu(activation)
+        activation = self.decoder_hidden_layer_2(activation)
+        activation = torch.relu(activation)
+        activation = self.decoder_output_layer_3(activation)
+        
+
+        reconstructed = torch.relu(activation)
+
+        return reconstructed.float(),code_Y.float()
+def seed_everything(seed: int):
+    
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+###################################################################################################################        
+#an example of NumText_CGAN                                                                                       #
+###################################################################################################################
+##check if  it is under GPU
+if torch.cuda.is_available():
+  dev = 'cuda:0'
+else:
+  dev='cpu'
+device = torch.device(dev)
+a = torch.zeros(4,3)
+a = a.to(device)
+a
+print(torch.cuda.get_device_name(0))  
+seed_everything(42)
+
+##load and format data
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_train_2021June.zip") 
+X_train = pd.read_csv(zf.open('NUM10K_X_train_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_test_2021June.zip") 
+X_test = pd.read_csv(zf.open('NUM10K_X_test_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_train_2021June.zip") 
+y_train = pd.read_csv(zf.open('NUM10K_y_train_2021June.csv'))
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_test_2021June.zip") 
+y_test = pd.read_csv(zf.open('NUM10K_y_test_2021June.csv'))
+X_train_nu = pd.merge(DDF, X_train, on = 'cik', how = 'inner')
+X_test_nu = pd.merge(DDF, X_test, on = 'cik', how = 'inner')
+X_train_nu = X_train_nu.drop(['date','RiskFactors', 'MDandA','cik'], axis = 1)
+X_test_nu = X_test_nu.drop(['date','RiskFactors', 'MDandA','cik'], axis = 1)
+#orginal data is train : test = 5:5
+#we want train : test = 8:2
+#so split train:test:val=8:2 test-> val 1, train 2, test 2, and than make training and validation dataset as final training dataset
+
+X_val_nu, X_test_nu, y_val, y_test = model_selection.train_test_split(X_test_nu, y_test, test_size = 2/5, random_state=41)
+
+
+##normalize the numerical data except feature 'sic'
+scaler_c = MinMaxScaler().fit(X_train_nu.drop(['sic'],axis = 1)) #scaler_c = MinMaxScaler().fit(X_train_nu[selected_vars].drop(['sic'],axis = 1)) #
+X_train_nu = produce_normalized(X_train_nu,scaler_c)#X_train_nu[selected_vars]
+X_val_nu = produce_normalized(X_val_nu,scaler_c)
+X_test_nu = produce_normalized(X_test_nu,scaler_c)
+
+##format and sent data toGPU
+x_train_nu = torch.from_numpy(X_train_nu)
+x_train_nu = x_train_nu.float()
+x_train_nu = x_train_nu.to(device,dtype=torch.float64)
+x_test_nu = torch.from_numpy(X_test_nu)
+x_test_nu = x_test_nu.float()
+x_test_nu = x_test_nu.to(device,dtype=torch.float64)
+x_val_nu = torch.from_numpy(X_val_nu)
+x_val_nu = x_val_nu.float()
+x_val_nu = x_val_nu.to(device,dtype=torch.float64)
+
+y_b_train_nu = y_train.reset_index(drop=True)
+y_b_test_nu = y_test.reset_index(drop=True)
+y_b_val_nu = y_val.reset_index(drop=True)
+y_b_train_nu = torch.from_numpy(y_train.values)
+y_b_test_nu = torch.from_numpy(y_test.values)
+y_b_val_nu = torch.from_numpy(y_val.values)
+y_b_train_nu = y_b_train_nu.to(device)
+y_b_test_nu = y_b_test_nu.to(device)
+y_b_val_nu = y_b_val_nu.to(device)
+
+##load textual data after processing, text summarization and cnn
+os.chdir("/content/drive/MyDrive/data")
+!ls
+data_dict_out = pickle.load(open("data_dict_rf_padding_cos.p","rb"))
+x_train_rf = data_dict_out['x_train']
+x_test_rf = data_dict_out['x_test']
+x_val_rf = data_dict_out['x_val']
+y_train_rf = data_dict_out['y_train']
+y_test_rf = data_dict_out['y_test']
+y_val_rf = data_dict_out['y_val']
+
+########################################################################################################################################
+##train an autoencoder with numerical data
+numerical_size = 192
+batch_size = 32
+epochs = 100
+learning_rate = 1e-2
+trainloader_2 = torch.utils.data.DataLoader(x_train_nu, batch_size=batch_size, shuffle=True, num_workers=0)
+
+AE_model = AE_wide(input_shape=40)
+AE_model = AE_model.double()
+AE_model.to(device)
+
+# create an optimizer object
+# Adam optimizer with learning rate 1e-2
+optimizer = torch.optim.Adam(AE_model.parameters(), lr=learning_rate)
+
+# mean-squared error loss
+criterion = nn.MSELoss().float()
+
+AE_model.train(True)
+es = EarlyStopping(patience=10)
+for epoch in range(epochs):
+    loss = 0
+    for batch_features in trainloader_2:
+        # reshape mini-batch data to [N, 784] matrix
+        batch_features = batch_features.view(-1, 40).to(device)
+        optimizer.zero_grad()
+        outputs,compressed_embedding = AE_model(batch_features)
+        train_loss = criterion(outputs, batch_features.float())
+        train_loss.backward()
+        optimizer.step()
+        
+        # add the mini-batch training loss to epoch loss
+        loss += train_loss.item()
+    
+    # compute the epoch training loss
+    loss = loss / len(trainloader_2)
+    if es.step(loss):
+        break
+    # display the epoch training loss
+    print("epoch : {}/{}, recon loss = {:.8f}".format(epoch + 1, epochs, loss))
+
+test_loader = torch.utils.data.DataLoader(
+    x_val_nu, batch_size=10, shuffle=False
+)
+
+test_examples = None
+
+with torch.no_grad():
+    for batch_features in test_loader:
+        batch_features = batch_features[0]
+        test_examples = batch_features.view(-1, 40)
+        reconstruction,embeddings = AE_model(test_examples)
+        break
+########################################################################################################################################       
+##train NumText_CGAN     
+
+##numerical data as main input and Risk Factors as conditional input
+textual_size = 40
+numerical_size = 192
+
+##textual data after cleaning, text summarization, and feature extraction via cnn
+data_dict_out = pickle.load(open("data_cnn_rf.p","rb"))
+x_train_cnn_rf = data_dict_out['x_train_cnn_rf']
+x_test_cnn_rf = data_dict_out['x_val_cnn_rf']
+
+y_train = y_train_rf
+y_test = y_val_rf
+
+condition_size = textual_size 
+train_condition = x_train_cnn_rf.to(dtype = torch.double)
+test_condition = x_test_cnn_rf.to(dtype = torch.double)
+
+initial_size = numerical_size
+train_initial = x_train_nu_ae.to(dtype = torch.double)
+test_initial = x_val_nu_ae.to(dtype = torch.double)
+
+test_initial_generate = x_test_nu_ae.to(dtype = torch.double)
+test_condition_generate = data_dict_out['x_test_cnn_rf']
+test_y_generate = y_b_test_rf  
+
+input_size, feature_size = train_initial.shape
+
+beta1=0.5
+beta2=0.999
+
+output_size = 1
+LR = 0.0001
+epoch = 400
+mb_size = 64
+noise_size = 10
+
+cost1tr = []
+cost2tr = []
+cost1D = []
+cost2D = []
+cost1ts = []
+cost2ts = []
+costtr = []
+costD = []
+costts = []
+
+#send model to GPU
+generator = Generator()
+discriminator = Discriminator() 
+generator=generator.double()
+discriminator = discriminator.double()
+generator.to(device)
+discriminator.to(device)
+
+loss_func = nn.BCELoss()
+adversarial_loss = nn.BCELoss()
+
+# Optimizers
+optimizer_G = torch.optim.Adam(generator.parameters(), lr=LR, betas=(beta1, beta2))
+optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=LR, betas=(beta1, beta2))
+
+generator.train(True)
+discriminator.train(True)
+
+for it in range(epoch):
+    epoch_cost = 0
+    epoch_cost1 = 0
+    epoch_cost2 = 0
+    num_minibatches = int(input_size / mb_size) 
+    minibatches_1,permu,x_excl = random_mini_batches_1(train_initial, y_train, mb_size)
+    minibatches_2 = random_mini_batches_2(train_condition, y_train, permu, mb_size)
+    for minibatch1,minubathch2 in zip(minibatches_1,minibatches_2):
+        XE1, YE1 = minibatch1 #numerical initial
+        XE2, YE1_ = minubathch2 #textual condition
+        YE = torch.cat((YE1_,YE1),dim=0)
+        Batch_Size = XE1.shape[0]
+        # Adversarial ground truths
+        valid = Variable(torch.ones((Batch_Size,1)).to(device), requires_grad=False)
+        fake = Variable(torch.zeros((Batch_Size,1)).to(device), requires_grad=False)
+
+        #noise
+        noise =  Variable(torch.randn((Batch_Size,noise_size)).to(device)) #XE2.shape[1] #XE1 #N(0,1)
+
+#################  Train Discriminator  #################
+
+        optimizer_D.zero_grad()
+
+        # Loss for real : numerical + y
+        OUTPUT_REAL = discriminator(condition=XE2.to(dtype = torch.double), input_pre = XE1.to(dtype = torch.double))[0]
+        d_real_loss = adversarial_loss(OUTPUT_REAL, torch.FloatTensor(Batch_Size,1).uniform_(0.7, 1).to(device).to(dtype = torch.double))
+
+        # Loss for fake : gen_x + y
+        gen_x = generator(XE2.to(dtype = torch.double), noise)
+        OUTPUT_FAKE = discriminator(XE2.to(dtype = torch.double).detach(),gen_x.to(dtype = torch.double))[0]
+        d_fake_loss = adversarial_loss(OUTPUT_FAKE, fake.to(dtype = torch.double))
+
+   
+        #bankruptcy classification loss
+        input_1 = torch.cat((gen_x, XE1), dim = 0)
+        input_2 = torch.cat((XE2,XE2), dim = 0)
+        l1 = loss_func(discriminator(input_2.to(dtype = torch.double), input_1.to(dtype = torch.double))[1], YE.view(-1,1).double())
+        
+        # Total discriminator loss
+        d_loss = d_real_loss + d_fake_loss  + l1/2 #+ d_other_loss
+
+        
+        d_loss.backward(retain_graph=True)
+        optimizer_D.step()
+
+
+#################  Train Generator  #################
+
+
+        
+        # Loss measures generator's ability to fool the discriminator
+        g_loss_fake = adversarial_loss(discriminator(XE2.to(dtype = torch.double),gen_x.to(dtype = torch.double))[0], valid.to(dtype = torch.double))
+        l2 = loss_func(discriminator(XE2.to(dtype = torch.double),gen_x.to(dtype = torch.double))[1], YE1.view(-1,1).double())#
+        g_loss = g_loss_fake + l2
+
+        optimizer_G.zero_grad()
+        g_loss.backward(retain_graph=True)
+        optimizer_G.step()
+    
+        epoch_cost1 = epoch_cost1 + (d_loss / num_minibatches)
+        epoch_cost2 = epoch_cost2 + (g_loss / num_minibatches)
+        epoch_cost1_mean = torch.mean(epoch_cost1)
+        epoch_cost1_mean = epoch_cost1_mean.cpu().detach().numpy().tolist()
+        epoch_cost2_mean = torch.mean(epoch_cost2)
+        epoch_cost2_mean = epoch_cost2_mean.cpu().detach().numpy().tolist()
+    
+    cost1tr.append(epoch_cost1_mean)
+    cost2tr.append(epoch_cost2_mean)
+    
+    with torch.no_grad():
+        Batch_Size = x_val_nu_ae.shape[0]
+        valid = Variable(torch.ones((Batch_Size,1)).to(device), requires_grad=False)
+        fake = Variable(torch.zeros((Batch_Size,1)).to(device), requires_grad=False)
+        noise = Variable(torch.randn((Batch_Size, noise_size)).to(device)) #X_val_rf_cnn.shape[1]
+
+################  loss of Discriminator #########################
+
+        # Loss for real : numerical + y
+        x_extented = test_initial #extractor(x_test_nu)
+        d_real_loss = adversarial_loss(discriminator(condition=test_condition.to(dtype = torch.double), input_pre = x_extented.to(dtype = torch.double))[0], valid.to(dtype = torch.double)) #[0]
+       
+        # Loss for fake : gen_x + y
+        gen_x = generator(test_condition, noise)
+        #gen_y = torch.zeros(Batch_Size, 1)
+        d_fake_loss = adversarial_loss( discriminator(test_condition.to(dtype = torch.double).detach(),gen_x.to(dtype = torch.double))[0], fake.to(dtype = torch.double))# [0]
+        
+        #bankruptcy classification loss
+        Label_Y = torch.cat((y_test, y_test), dim = 0)
+        input_1 = torch.cat((gen_x, x_extented), dim = 0)
+        input_2 = torch.cat((test_condition, test_condition), dim = 0)
+        c_loss = loss_func(discriminator(input_2.to(dtype = torch.double), input_1.to(dtype = torch.double))[1], Label_Y.view(-1,1).double()) #[1]
+
+        # Total discriminator loss
+        d_loss = d_real_loss + d_fake_loss+ c_loss/2 #+ d_other_loss
+        g_loss_fake = adversarial_loss(discriminator(test_condition.to(dtype = torch.double),gen_x.to(dtype = torch.double))[0], valid.to(dtype = torch.double))#[0]
+        c_loss_2 = loss_func(discriminator(test_condition.to(dtype = torch.double),gen_x.to(dtype = torch.double))[1], y_test.view(-1,1).double())#[1]
+        g_loss = g_loss_fake + c_loss_2
+
+        l1D = d_loss.cpu().detach().numpy().tolist()
+        l2D = g_loss.cpu().detach().numpy().tolist()
+        cost1D.append(l1D)
+        cost2D.append(l2D)
+        #aveloss = 0.7*l1D+0.3*l2D
+        costD.append(cost1D)
+        print('Iter-{}; Total loss: {:.4}'.format(it, d_loss.data))
+
+plt.plot(np.squeeze(cost1tr), '-r', np.squeeze(cost1D), '-b')
+plt.ylabel('d_loss')
+plt.xlabel('iterations (per tens)')
+plt.show() 
+
+plt.plot(np.squeeze(cost2tr),'-r', np.squeeze(cost2D),'-b')
+plt.ylabel('g_loss')
+plt.xlabel('iterations (per tens)')
+##############################################################################################################################################
+#generate more data
+
+generate_count = 1 #values for m: the ratio of the size of generated data to the size of training dataset
+generator.eval()
+
+train_initial = torch.cat((train_initial,test_initial),dim=0)
+train_condition = torch.cat((train_condition,test_condition),dim=0)
+y_train = torch.cat((y_b_train_rf,y_test),dim=0)
+
+X_fake_1= torch.zeros(1,initial_size).to(device) #initial 
+X_rf_1 = torch.zeros(1,condition_size).to(device)  #condition 
+y_b_train_1 = torch.zeros(1,1).to(device)
+for i in range(0,generate_count):
+    # fake data
+    noise = Variable(torch.randn((train_initial.shape[0], noise_size)).to(device))
+    X_fake_0 = generator(train_condition, noise)
+    y_b_train_0 = y_train
+    #concate fake numerical data and textual data
+    X_fake_1 = torch.cat((X_fake_1, X_fake_0), dim =0)
+    X_rf_1 = torch.cat((X_rf_1, train_condition),dim = 0)
+    y_b_train_1 = torch.cat((y_b_train_1, y_b_train_0),dim = 0)
+X_fake = torch.cat((X_fake_1[1:], X_rf_1[1:]),dim=1)
+y_b_train_fake = y_b_train_1[1:]
+
+##real data: concate numerical data and textual data
+x_train_all = torch.cat((train_initial, train_condition), dim =1) 
+X_combined = torch.cat((X_fake,x_train_all), dim = 0) #make fake and real data together
+y_b_train = torch.cat((y_b_train_fake,y_train),dim = 0)
+x_test_all = torch.cat((test_initial_generate, test_condition_generate), dim =1)

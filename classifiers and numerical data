@@ -1,0 +1,686 @@
+## The code is run on colab
+##
+from google.colab import drive
+drive.mount('/content/drive')
+
+import pandas as pd
+import numpy as np
+import zipfile
+import sys
+import os
+
+from sklearn.feature_selection import f_regression,RFE
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.utils import resample
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split,learning_curve,ShuffleSplit,ParameterGrid,GridSearchCV,StratifiedShuffleSplit,RepeatedStratifiedKFold
+from sklearn.linear_model import LogisticRegression as logistic
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier #BaggingClassifier,,ExtraTreesClassifier, AdaBoostClassifier, GradientBoostingClassifier
+from sklearn.metrics import confusion_matrix, precision_recall_curve, auc, roc_auc_score, roc_curve, recall_score, classification_report
+#from imblearn.under_sampling import RandomUnderSampler as UnderSampler
+#from imblearn.over_sampling import RandomOverSampler as OverSampler
+
+from keras import models
+from keras import layers
+from keras.optimizers import SGD
+from keras.wrappers.scikit_learn import KerasClassifier
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import seaborn as sns
+sns.set_style("whitegrid")
+sns.set_context('talk')
+
+import joblib
+
+def sic_sec(sic):
+  if 3999>=sic>=2000:
+      item = 1 #manufacturing
+  elif 4999>=sic>=4000:
+      item = 2 #Transportation, Communications,Electric,Gas and Sanitary
+  elif 5199>=sic>=5000:
+      item = 3 #wholesale trade
+  elif 5999>=sic>=5200:
+      item = 4 #retail trade
+  elif 6799>=sic>=6000:
+      item = 5 #Finance,Insurance and real estate trade
+  else:
+      item = 6 #non classifiable
+  return item
+def produce_normalized(df, scaler):
+    df_sic = df[['sic']]
+    df_fr = scaler.transform(df.drop(['sic'],axis = 1)) ###normalize data except sic
+    df_fr = np.column_stack([df_fr, df_sic.values])
+    return df_fr
+ def max_min_set(X_tra):    
+    max_min_scaler = lambda x: (x - np.min(x)) / (np.max(x) - np.min(x))
+    column_name = X_tra.columns.values.tolist()
+    column_name.remove('sic')
+    for i in column_name:
+        X_tra[[i]] = X_tra[[i]].apply(max_min_scaler)
+    return X_tra
+def stad_set(X_tra):
+    standard_scaler = lambda x: (x - np.mean(x)) / np.std(x)
+    column_name = X_tra.columns.values.tolist()
+    column_name.remove('sic')
+    for i in column_name:
+        X_tra[[i]] = X_tra[[i]].apply(standard_scaler)
+    return X_tra
+def FR_feature(X_tra,y_tra):
+    FR = f_regression(X_tra, y_tra)
+    f_test = FR[0]
+    p_value = FR[1]
+    indices = np.argsort(f_test)[::-1]
+    #plt.figure()
+    #plt.title("p_value")
+    #plt.bar(range(X_tra.shape[1]), p_value[indices],color="r", align="center")
+    #plt.xticks(range(X_tra.shape[1]), indices)
+    #plt.xlim([-1, X_tra.shape[1]])
+    #plt.show()
+    selectlist = np.argsort(FR[0])[::-1]
+    selected_columns_f = []
+    for f in range(X_tra.shape[1]-1):
+        print(f)
+        print( indices[f],feature_list[f], FR[0][indices[f]],p_value[indices[f]])
+        if p_value[indices[f]]<0.05:
+            selected_columns_f.append(feature_list[f])
+    return(selected_columns_f) 
+###RFE method based on logistic regression
+def log_feature(X_tra, y_tra, num_feature):
+    logreg = LogisticRegression(max_iter = 1500)
+    rfe = RFE(estimator = logreg, n_features_to_select = num_feature)
+    rfe = rfe.fit(X_tra.values, y_tra)
+    #print(rfe.support_)
+    #print(rfe.ranking_)
+    #print("Num Features:", rfe.n_features_)
+    #print("Features sorted by their rank:")
+    selected = sorted(zip(filter(lambda i: i==1, rfe.ranking_), feature_list))
+    a = np.array(selected).reshape(-1,2)
+    selected_columns_ref=[]
+    for i in range(num_feature):
+        b = a[i][1] 
+        selected_columns_ref.append(b)
+    return(selected_columns_ref)
+    #len(rfe.ranking_)
+### Build a forest and compute the impurity-based feature importances
+def RF_feature(X_tra, y_tra, num_feature):
+    rf = RandomForestRegressor(n_estimators=250)
+    rf.fit(X_tra.values, y_tra)
+    importances = rf.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in rf.estimators_],
+             axis=0)
+    indices = np.argsort(importances)[::-1]
+    selectlist_rf = np.argsort(importances)[::-1][0:num_feature]
+    selected_columns_rf =[]
+    for i in selectlist_rf:
+        print(feature_list[i])
+        b = feature_list[i]
+        selected_columns_rf.append(b)
+    return(selected_columns_rf)
+
+
+def plot_learning_curve(estimator, title, X, y, axes=None, ylim=None, cv=None,
+                        n_jobs=None, train_sizes=np.linspace(.1, 1.0, 10)):
+    
+    if axes is None:
+        _, axes = plt.subplots(1, 2, figsize=(20, 10))
+
+    axes[0].set_title(title)
+    if ylim is not None:
+        axes[0].set_ylim(*ylim)
+    axes[0].set_xlabel("Training examples")
+    axes[0].set_ylabel("Score")
+
+    train_sizes, train_scores, test_scores, fit_times, _ = \
+        learning_curve(estimator, X, y, cv=cv, n_jobs=n_jobs,
+                       train_sizes=train_sizes,
+                       return_times=True, scoring = scoring)
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+    fit_times_mean = np.mean(fit_times, axis=1)
+    fit_times_std = np.std(fit_times, axis=1)
+
+    # Plot learning curve
+    axes[0].grid()
+    axes[0].fill_between(train_sizes, train_scores_mean - train_scores_std,
+                         train_scores_mean + train_scores_std, alpha=0.1,
+                         color="r")
+    axes[0].fill_between(train_sizes, test_scores_mean - test_scores_std,
+                         test_scores_mean + test_scores_std, alpha=0.1,
+                         color="g")
+    axes[0].plot(train_sizes, train_scores_mean, 'o-', color="r",
+                 label="Training score")
+    axes[0].plot(train_sizes, test_scores_mean, 'o-', color="g",
+                 label="Cross-validation score")
+    axes[0].legend(loc="best")
+
+    # Plot n_samples vs fit_times
+    axes[1].grid()
+    axes[1].plot(train_sizes, fit_times_mean, 'o-')
+    axes[1].fill_between(train_sizes, fit_times_mean - fit_times_std,
+                         fit_times_mean + fit_times_std, alpha=0.1)
+    axes[1].set_xlabel("Training examples")
+    axes[1].set_ylabel("fit_times")
+
+    return plt
+
+
+
+# resampling the data if needed
+def over_sample(X, y, oversample_mode, random_state=42):
+    global X_rebalanced, y_rebalanced
+    if oversample_mode == 'Original':
+        X_rebalanced, y_rebalanced = X, y
+    elif  oversample_mode == 'simple undersample':
+        us = UnderSampler(random_state=42)
+        X_rebalanced, y_rebalanced = us.fit_sample(X, y)
+    elif oversample_mode == 'simple oversample':
+        os = OverSampler(random_state=42)
+        X_rebalanced, y_rebalanced = os.fit_sample(X, y)
+    elif oversample_mode == 'ADASYN':
+        ada = ADASYN(random_state=42)
+        X_rebalanced, y_rebalanced = ada.fit_resample(X, y)
+    elif oversample_mode == 'SMOTE':
+        sm = SMOTE(random_state=42)
+        X_rebalanced, y_rebalanced = sm.fit_resample(X, y)
+    #elif oversample_mode == 'Bordline_1':
+    #    bl1 = SMOTE(kind='borderline1', random_state=42)
+     #   X_rebalanced, y_rebalanced = bl1.fit_resample(X, y)
+    #elif oversample_mode == 'Bordline_2':
+     #   bl2 = SMOTE(kind='borderline2', random_state=42)
+     #   X_rebalanced, y_rebalanced = bl2.fit_resample(X, y) 
+    #elif oversample_mode == 'BOS_SVM':
+        #bos_svm = SMOTE(kind='svm', random_state=random_state)
+        #X_rebalanced, y_rebalanced = bos_svm.fit_resample(X, y)      
+    return X_rebalanced, y_rebalanced
+
+###the performance of the models
+def method_peformance(y_pred, y_prob):
+    auc = roc_auc_score(y_tested, y_prob)
+    best_f1 = 0
+    cutoff=0
+    recall_tr=0
+    acc_tr=0
+    precision_tr=0
+    for threshold in np.linspace(0.01,1,100):
+        prediction = []
+        for item in y_prob:
+            b = int(item > threshold)##threshold varies
+            prediction.append(b)  
+            prediction2 = numpy.array(prediction)
+        acc_ = accuracy_score(y_tested, prediction2)
+        f1_ = f1_score(y_tested, prediction2, average='binary', sample_weight=None, zero_division='warn') #pos_label =1 by default
+        recall_ = recall_score(y_tested, prediction2)
+        precision_ = precision_score(y_tested, prediction2)
+        if f1_ > best_f1:
+            best_f1 = f1_
+            acc_tr = acc_
+            recall_tr = recall_
+            precision_tr = precision_
+            cutoff = threshold
+    print('threshold:',cutoff)
+    acc = accuracy_score(y_tested, y_pred)
+    return auc, best_f1, 'Recall {:.4f}'.format(recall_tr), precision_tr, acc_tr #,coverage
+
+def result_produce(modes, modelname, Xtain, Ytrain, Xtest,clfier):
+    perf_model = []
+    for mode in modes:
+        metrics_dic ={}
+        metrics_dic['model'] = modelname
+    
+        X_train_new, y_train_new = over_sample(Xtrain, Ytrain, oversample_mode=mode)
+        m, y_prob_m, auc, f1, recall, precision, acc = clfier(X_train_new, y_train_new, Xtest)
+        title = "Learning Curves of "+modelname
+        # Cross validation with 5 iterations to get smoother mean test and train
+        # score curves, each time with 20% data randomly selected as a validation set.
+        cv = ShuffleSplit(n_splits=5, test_size=0.2, random_state=42)
+        #cv = ShuffleSplit(n_splits=1, test_size=0, random_state=42)
+        plot_learning_curve(m, title, Xtrain, Ytrain, ylim=(0, 1.01),
+                    cv=cv, n_jobs=4)
+        plt.show()
+    
+        metrics_dic['mode'] = mode
+        metrics_dic['auc'] = auc
+        metrics_dic['f1'] = f1
+        metrics_dic['recall'] = recall
+        metrics_dic['precision'] = precision
+        metrics_dic['acc'] = acc
+        perf_model.append(metrics_dic)
+        print(mode ,":","auc:",auc, "f1:",f1, "recall:",recall, "precision:",precision,"acc:", acc)
+    
+    ##CUTOFF = 0.5
+        prediction= []
+        for item in y_prob_m:
+            b = int(item > 0.5)##set threshold is 0.5
+            prediction.append(b)  
+            prediction2 = numpy.array(prediction)
+        acc = accuracy_score(y_tested, prediction2)
+        f1 = f1_score(y_tested, prediction2, average='binary', sample_weight=None, zero_division='warn') #pos_label =1 by default
+        recall = 'Recall {:.4f}'.format(recall_score(y_tested, prediction2))
+        precision = precision_score(y_tested, prediction2)
+        metrics_dic ={}
+        metrics_dic['model'] = modelname
+        metrics_dic['param'] = '0.5cutoff'
+        metrics_dic['mode'] = mode
+        metrics_dic['auc'] = auc
+        metrics_dic['f1'] = f1
+        metrics_dic['recall'] = recall
+        metrics_dic['precision'] = precision
+        metrics_dic['acc'] = acc
+        perf_model.append(metrics_dic)
+
+    perf_model_df = pd.DataFrame(perf_model)
+    return perf_model_df
+    
+def grid_log(X_scaled_selected, y_trained, test_x):
+    lr = logistic(max_iter = 20000,solver='liblinear',class_weight = None , random_state = 42)
+    # Create regularization penalty space
+    penalty = ['l1','l2']   #solver='lbfgs''liblinear'['none','l2']
+    # Create hyperparameter options
+    param_grid = {'C':np.logspace(2,0,20),'penalty' : penalty}
+    # Create grid search using 5-fold cross validation
+    best_score = 0
+    for g in ParameterGrid(param_grid):
+        lr.set_params(**g)
+        lr.fit(X_scaled_selected, y_trained)
+    #run cross-validation
+        scores = cross_val_score(lr, X_scaled_selected, y_trained, cv=5, scoring=scoring)      
+        scores = scores.mean()
+        if scores > best_score:
+            best_score = scores
+            best_grid = g
+            best_model = lr
+    lr.set_params(**best_grid)
+    lr.fit(X_scaled_selected, y_trained)
+    model1 = lr
+    y_pred, y_prob = model1.predict(test_x), model1.predict_proba(test_x)[:,-1] 
+    auc, f1, recall, precision, acc = method_peformance(y_pred, y_prob)
+    with open('lr.singleNum.pkl', 'wb') as files:
+       pickle.dump(lr, files)
+    #joblib.dump(model1,"lr.pkl")
+    print("acc of training: %0.5f" % best_score)
+    print( "Grid:", best_grid)   
+    print(confusion_matrix(y_tested, y_pred))
+    print(classification_report(y_tested, y_pred,digits=4))
+    print(model1)    
+    return model1, y_prob, auc, f1, recall, precision, acc
+    
+def grid_SVM(X_scaled_selected, y_train, test_x):
+
+    param_grid = {'C': np.logspace(5,0,50),  #0,2
+              'gamma': [0.000001, 0.00001,0.0001,0.001,0.01,0.1,1, 0.2, 0.4, 0.8] ,
+              'kernel': ['rbf']}  
+    svc = SVC(probability = True, random_state = 42)
+    best_score = 0
+    for g in ParameterGrid(param_grid):
+        svc.set_params(**g)
+        svc.fit(X_scaled_selected, y_train)
+        scores = cross_val_score(svc, X_scaled_selected, y_train, cv=5, scoring=scoring)      
+        scores = scores.mean()
+        if scores > best_score:
+            best_score = scores
+            best_grid = g
+            best_model = svc
+    svc.set_params(**best_grid)
+    svc.fit(X_scaled_selected, y_train)
+    y_pred, y_prob = svc.predict(test_x), svc.predict_proba(test_x)[:,-1] 
+    auc, f1, recall, precision, acc = method_peformance(y_pred, y_prob)
+    #joblib.dump(svc,"svc.pkl")
+    with open('svc_singleNum.pkl', 'wb') as files: #svc_singleNum.pkl #'svc_singleNumfakelr.pkl'
+       pickle.dump(svc, files)
+    print("auc of training: %0.5f" % best_score)
+    print( "Grid:", best_grid)
+    print(confusion_matrix(y_tested, y_pred))
+    print(classification_report(y_tested, y_pred))
+    print(svc)
+    return svc,y_prob, auc, f1, recall, precision, acc
+    
+def grid_rf(X_scaled_selected, y_train, test_x):
+    param_grid = {
+    'bootstrap': [False],
+    'max_depth': [5,10,20],#,6,7,8,9
+    'max_features': [5,10,20],#,20,30
+    'min_samples_leaf': np.linspace(0.1, 0.3, 5, endpoint=True),
+    'min_samples_split': np.linspace(0.2, 0.6, 5, endpoint=True),
+    'n_estimators': [5,10,20]#,10,20
+    #    'oob_score': [True]
+    }
+    rf = RandomForestClassifier(random_state = 42)
+    best_score = 0
+    for g in ParameterGrid(param_grid):
+        rf.set_params(**g)
+        rf.fit(X_scaled_selected, y_train)
+    # save if best
+        scores = cross_val_score(rf, X_scaled_selected, y_train, cv=5, scoring=scoring)      
+        scores = scores.mean()
+        if scores > best_score:
+            best_score = scores
+            best_grid = g
+            best_model = rf
+    rf.set_params(**best_grid)
+    rf.fit(X_scaled_selected, y_train)
+    model1 = rf
+    y_pred, y_prob = model1.predict(test_x), model1.predict_proba(test_x)[:,-1] 
+    auc, f1, recall, precision, acc = method_peformance(y_pred, y_prob)
+    with open('rf_singleNum.pkl', 'wb') as files:
+       pickle.dump(rf, files)
+    print("auc of training: %0.5f" % best_score)
+    print( "Grid:", best_grid)
+    print(confusion_matrix(y_tested, y_pred))
+    print(classification_report(y_tested, y_pred))
+    print(model1)
+    return model1,y_prob, auc, f1, recall, precision, acc
+    
+def create_network(learn_rate = 0.001, momentum=0.1): #, momentum=0, optimizer ='Adam
+    network = models.Sequential()
+    number_of_features = Xtrain.shape[1] #len(kernel_sizes)*kernel_num
+    network.add(layers.Dense(units=4, activation='relu', input_shape=(number_of_features,)))
+    network.add(layers.Dense(units=4, activation='relu')) 
+    network.add(layers.Dense(units=4, activation='relu')) 
+    network.add(layers.Dense(units=4, activation='relu'))  
+    optimizer = SGD(lr=learn_rate, momentum=momentum)
+    # Compile neural network 
+    network.compile(loss='binary_crossentropy', # Cross-entropy, optimizer=optimizer, # Optimizer
+                    optimizer=optimizer,
+                    metrics = ['accuracy']) #  performance metric
+    # Return compiled network
+    return network
+def grid_NN(Xtrain, Ytrain, test_x):
+    neural_network = KerasClassifier(build_fn=create_network, verbose=3)
+
+# Create hyperparameter space
+    epochs = [100,50]#,50,20
+    #batches = [16]#,16,32
+    #optimizers = ['rmsprop', 'adam']
+    learn_rate = [0.01,0.001,0.1,0.0001,0.00001]
+    #momentum = [0.0, 0.2, 0.4]
+# Create hyperparameter options
+    param_grid = dict(learn_rate = learn_rate, epochs=epochs ) #momentum=momentum, batch_size=batches
+    estimator  = neural_network
+# Create grid search
+    best_score = 0
+    best_grid = param_grid
+    for g in ParameterGrid(param_grid):
+        estimator.set_params(**g)
+        callback = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=3)
+        history = estimator.fit(Xtrain, Ytrain,callbacks=[callback],
+                     verbose=0)
+      
+        ##cv
+        cv = ShuffleSplit(n_splits=5, test_size=0.2, random_state=0)
+        scores = cross_val_score(estimator, Xtrain, Ytrain, cv=cv, scoring=scoring)      
+        scores = scores.mean()
+        if scores > best_score:
+            best_score = scores
+            best_grid = g
+            best_model = estimator
+    estimator.set_params(**best_grid)
+    estimator.fit(Xtrain, Ytrain,callbacks=[callback],
+                     verbose=0)
+    y_pred, y_prob = estimator.predict(test_x), estimator.predict_proba(test_x)[:,-1] 
+    auc, f1, recall, precision, acc = method_peformance(y_pred, y_prob)
+    with open('nn_singleNum.pkl', 'wb') as files:
+       pickle.dump(estimator, files)
+    print("auc of training: %0.5f" % best_score)
+    print( "Grid:", best_grid)
+    print(confusion_matrix(y_tested, y_pred))
+    print(classification_report(y_tested, y_pred))
+    print(estimator)
+    return estimator, y_prob, auc, f1, recall, precision, acc
+
+def RepeatedCVEvaluation(X,y, method):
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=9)
+    idx = np.arange(0, len(y))
+    tprs = []
+    AUCs = []
+    accs=[]
+    f1s=[]
+    recalls=[]
+    precisions =[]
+    for j in np.random.randint(0, high=10000, size=repeat):
+        np.random.shuffle(idx)
+        prediction =[]
+        for i, (train, test) in enumerate(cv.split(X, y)):
+            method.fit(X[train], y[train])
+            y_score, prediction2 = method.predict_proba(X[test]),method.predict(X[test])
+            #fpr, tpr, _ = roc_curve(y[test], y_score[:, 1])
+            #plt.plot(fpr, tpr, 'grey', alpha=0.15)
+            #tpr = np.interp(base_fpr, fpr, tpr)
+            #tpr[0] = 0.0
+            #tprs.append(tpr)
+
+            auc = roc_auc_score(y[test], y_score[:, 1])
+            AUCs.append(auc)
+            acc = accuracy_score(y[test], prediction2)
+            f1 = f1_score(y[test], prediction2, average='binary', sample_weight=None, zero_division='warn') #pos_label =1 by default
+            recall = recall_score(y[test], prediction2)
+            precision = precision_score(y[test], prediction2)
+            accs.append(acc)
+            f1s.append(f1)
+            recalls.append(recall)
+            precisions.append(precision)
+    AUCs = np.array(AUCs)
+    mean_AUCs = AUCs.mean(axis=0)
+    std_AUCs = AUCs.std(axis=0)
+
+    f1s = np.array(f1s)
+    mean_f1s  = f1s.mean(axis=0)
+    std_f1s  = f1s.std(axis=0)
+
+    recalls = np.array(recalls)
+    mean_recalls = recalls.mean(axis=0)
+    std_recalls = recalls.std(axis=0)
+
+    precisions = np.array(precisions)
+    mean_precisions = precisions.mean(axis=0)
+    std_precisions = precisions.std(axis=0)
+
+    accs = np.array(accs)
+    mean_accs = accs.mean(axis=0)
+    std_accs = accs.std(axis=0)
+    print("auc and sd:",mean_AUCs,std_AUCs)
+    print("f1 and sd:",mean_f1s,std_f1s)
+    print("Recall and sd:",mean_recalls,std_recalls)
+    print("Precision and sd:",mean_precisions,std_precisions)
+    print("Accuracy and sd:",mean_accs,std_accs)
+    return "auc and sd:",mean_AUCs,std_AUCs,"f1 and sd:",mean_f1s,std_f1s,"Recall and sd:",mean_recalls,std_recalls,"Precision and sd:",mean_precisions,std_precisions,"Accuracy and sd:",mean_accs,std_accs   
+#######################################################################################################################
+#1 load data
+zf = zipfile.ZipFile("/content/drive/My Drive/data/39FV_2021June.zip") 
+DF = pd.read_csv(zf.open('39FV_2021June.csv'))
+
+#2 preprocessing numerical data
+
+##2.1 deal with categorical data
+zf = zipfile.ZipFile("/content/drive/My Drive/data/sic.zip") 
+DDF = pd.read_csv(zf.open('sic.csv'))
+DDF = DDF.drop_duplicates(subset=['cik'],keep='last')
+DDF = pd.DataFrame(DDF, columns=['cik','sic'])
+DDF.loc[DDF.shape[0]]={'cik':1705771,'sic':5990} 
+DDF.loc[DDF.shape[0]]={'cik':1698530,'sic':2834}
+DDF.loc[DDF.shape[0]]={'cik':1517498,'sic':5122}
+DDF['sic']=DDF['sic'].apply(sic_sec)
+df_nu = pd.merge(DDF, DF, on = 'cik', how = 'inner')
+df_nu = df_nu.drop(['date','fyear', 'cik'], axis = 1)
+
+##2.2 creat balanced numerical data
+DF_0 = df_nu[df_nu['Bankruptcy'] == 0]
+DF_0 = DF_0.sample( n= 136,random_state = 123) 
+DF_1 = df_nu[df_nu['Bankruptcy'] == 1]
+DFs = [DF_0,DF_1]
+DF_all = pd.concat(DFs, axis=0,ignore_index=True)# ignore the original index
+
+##2.3 train set and test set = 8:2
+X_train, X_test, y_train, y_test = model_selection.train_test_split(DF_all.drop(['Bankruptcy'],axis = 1), DF_all['Bankruptcy'], test_size = 0.2,random_state=42)
+
+##2.4 deal with the columns with nan (fill nan with mean) in training dataset
+cols = [col for col in X_train.columns if col not in['sic','cik']]
+gp_col = 'sic'
+X_train_na = X_train[cols].isna()
+X_train_mean = X_train.groupby(gp_col)[cols].mean() # group data by sic and get the mean of every industry
+for col in cols:
+    na_series = X_train_na[col]
+    names = list(X_train.loc[na_series,gp_col])     
+    t = X_train_mean.loc[names,col]
+    t.index = X_train.loc[na_series,col].index    
+    X_train.loc[na_series,col] = t
+    
+##2.5 deal with the columns with nan (fill nan with mean) in testing dataset
+cols = [col for col in X_test.columns if col not in['sic','cik']]
+X_test_na = X_test[cols].isna()
+X_test_mean = X_train.groupby(gp_col)[cols].mean() #use training dataset to deal with missing value
+for col in cols:
+    na_series = X_test_na[col]
+    names = list(X_test.loc[na_series,gp_col])     
+    t = X_test_mean.loc[names,col]
+    t.index = X_test.loc[na_series,col].index
+    X_test.loc[na_series,col] = t
+
+
+##2.6 deal with the columns with inf (fill inf with 10*maximum) in training dataset
+X_train =X_train.replace(np.inf, np.nan)
+X_test =X_test.replace(np.inf, np.nan)
+cols = [col for col in X_train.columns if col not in['sic','cik']]
+X_train_na = X_train[cols].isna()
+X_train_max = X_train.groupby(gp_col)[cols].max()*10 
+for col in cols:
+    na_series = X_train_na[col]
+    names = list(X_train.loc[na_series,gp_col])     
+
+    t = X_train_max.loc[names,col]
+    t.index = X_train.loc[na_series,col].index    
+    X_train.loc[na_series,col] = t
+
+##2.7 deal with the columns with inf (fill inf with 10*maximum) in testing datset
+cols = [col for col in X_test.columns if col not in['sic','cik']]
+X_test_na = X_test[cols].isna()
+X_test_max = X_train.groupby(gp_col)[cols].max()*10 ##for test set, use the number from training dataset to fill
+for col in cols:
+    na_series = X_test_na[col]
+    names = list(X_test.loc[na_series,gp_col])     
+    t = X_test_max.loc[names,col]
+    t.index = X_test.loc[na_series,col].index    
+    X_test.loc[na_series,col] = t
+
+##2.8 deal with the -inf (fill inf with 1/10*minimum) in training dataset
+X_train =X_train.replace(-np.inf, np.nan)
+X_test =X_test.replace(-np.inf, np.nan)
+cols = [col for col in X_train.columns if col not in['sic','cik']]
+X_train_na = X_train[cols].isna()
+X_train_min = X_train.groupby(gp_col)[cols].min()/10
+for col in cols:
+    na_series = X_train_na[col]
+    names = list(X_train.loc[na_series,gp_col])     
+    t = X_train_max.loc[names,col]
+    t.index = X_train.loc[na_series,col].index    
+    X_train.loc[na_series,col] = t
+
+##2.9 deal with the -inf (fill inf with 10*minimum) in testing dataset
+cols = [col for col in X_test.columns if col not in['sic','cik']]
+X_test_na = X_test[cols].isna()
+X_test_min = X_train.groupby(gp_col)[cols].min()/10 ##for test set, use the number from training dataset to fill
+for col in cols:
+    na_series = X_test_na[col]
+    names = list(X_test.loc[na_series,gp_col])     
+    t = X_test_min.loc[names,col]
+    t.index = X_test.loc[na_series,col].index    
+    X_test.loc[na_series,col] = t
+    
+##2.10 delete columns with full 0
+i = 0
+for column in X_train.columns:   
+    a = len( X_train[ X_train[column]==0])/len(X_train)    
+    if a>0.5:
+        i=i+1
+        print(column,a)
+        X_train = X_train.drop([column],axis = 1)
+        try:
+            X_test = X_test.drop([column],axis = 1)
+        except:
+            continue
+i = 0
+for column in X_test.columns:   
+    a = len( X_test[ X_test[column]==0])/len(X_test)    
+    if a > 0.5:
+        i=i+1
+        print(column,a)
+        X_test = X_test.drop([column],axis = 1)
+        try:
+             X_train = X_train.drop([column],axis = 1)
+        except:
+            continue
+
+#3 feature selection
+y_train = y_train.ravel()
+y_test = y_test.ravel()
+F_columns = X_train.columns.to_list()
+feature_list = F_columns
+X_train_fr = max_min_set(X_train)
+X_train_frsd = stad_set(X_train_fr) ####normalization and then standardization
+selected_vars = list(set(RF_feature(X_train_frsd,y_train,10)).union(set(log_feature(X_train_frsd, y_train, 10))).union(set(FR_feature(X_train_fr, y_train))))
+
+#4 normalize the numerical data except feature 'sic'
+scaler_c = MinMaxScaler().fit(X_train[selected_vars].drop(['sic'],axis = 1)) #scaler_c = MinMaxScaler().fit(X_train_nu[selected_vars].drop(['sic'],axis = 1)) #
+X_train_nu = produce_normalized(X_train[selected_vars],scaler_c) #X_val_nu = produce_normalized(X_val[selected_vars],scaler_c)
+X_test_nu = produce_normalized(X_test[selected_vars],scaler_c)
+
+#5 training classifiers
+scoring = "accuracy" #'roc_auc' #"accuracy" #"f1"
+modes = ['Original'] ##,'simple undersample', 'simple oversample', 'SMOTE'
+Xtrain = X_train_nu
+Ytrain = y_train
+Xtest = X_test_nu
+y_tested = y_test.ravel()
+
+##5.1 logistic regression
+modelname = 'LG' 
+clfier = grid_log 
+result_log_1 = result_produce( modes, modelname, Xtrain, Ytrain, Xtest, clfier )
+result_log_1
+repeat = 100
+X = np.concatenate([Xtrain, Xtest])
+y = np.concatenate([Ytrain, y_tested])
+with open('lr.singleNum.pkl' , 'rb') as f:
+    method = pickle.load(f)
+Repeatedlg = RepeatedCVEvaluation(X,y, method)
+Repeatedlg
+
+##5.2 SVM
+modelname = 'svm' 
+clfier = grid_SVM 
+result_SVM_1 = result_produce( modes, modelname, Xtrain, Ytrain, Xtest, clfier )
+result_SVM_1
+repeat = 100
+X = np.concatenate([Xtrain, Xtest])
+y = np.concatenate([Ytrain, y_tested])
+with open('svc_singleNum.pkl' , 'rb') as f:
+    methods = pickle.load(f)
+RepeatedSVM= RepeatedCVEvaluation(X,y, method)
+RepeatedSVM
+
+##5.3 random forest
+modelname = 'RF' 
+clfier = grid_rf 
+result_rf_1 = result_produce( modes, modelname, Xtrain, Ytrain, Xtest, clfier )
+result_rf_1
+repeat = 100
+X = np.concatenate([Xtrain, Xtest])
+y = np.concatenate([Ytrain, y_tested])
+with open('rf_singleNum.pkl' , 'rb') as f:
+    method = pickle.load(f)
+RepeatedRF = RepeatedCVEvaluation(X,y, method)
+
+##5.4 NN
+modelname = 'RF' 
+clfier = grid_NN
+result_nn_1 = result_produce( modes, modelname, Xtrain, Ytrain, Xtest, clfier )
+result_nn_1
+repeat = 100
+with open('nn_singleNum.pkl', 'rb') as f:
+    method = pickle.load(f)
+RepeatedNN = RepeatedCVEvaluation(X,y, method)

@@ -1,0 +1,418 @@
+#The code ran on colab
+from google.colab import drive
+drive.mount('/content/drive')
+import sys
+sys.path.append('/content/drive/gridallcv')
+!pip install transformers
+!pip install nltk
+import nltk
+from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+porter_stemmer=PorterStemmer()
+nltk.download('wordnet')
+lemmatizer = WordNetLemmatizer()
+nltk.download('stopwords')
+nltk.download('punkt')
+from nltk.corpus import stopwords
+stopWords = set(stopwords.words("english"))
+!pip install git+https://github.com/ncullen93/torchsample
+from torchsample.modules import ModuleTrainer
+
+!pip install pytorch-pretrained-bert
+import torch
+from pytorch_pretrained_bert import BertTokenizer, BertModel, BertForMaskedLM
+!pip install pytorch-pretrained-bert
+import torch
+from pytorch_pretrained_bert import BertTokenizer, BertModel, BertForMaskedLM
+
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances
+from sklearn import preprocessing
+import zipfile
+import logging
+import matplotlib.pyplot as plt
+#check if  it is under GPU
+if torch.cuda.is_available():
+  dev = 'cuda:0'
+else:
+  dev='cpu'
+device = torch.device(dev)
+a = torch.zeros(4,3)
+a = a.to(device)
+a
+print(torch.cuda.get_device_name(0))
+#######################################################################################################################
+#0 preprocessing of 10-K                                                                                         #
+#######################################################################################################################
+def preprocess_text(text):
+  tag_re = re.compile(r'<[^>]+>')
+  text = tag_re.sub('',text)
+  #single character removal
+  text = re.sub(r"\s+[a-zA-Z]\s+",' ',text)
+  #removing multiple spaces
+  text = re.sub(r'\s+',' ',text)
+  return text
+  
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_train_2021June_im.zip") #NUM10K_X_train_2021June.zip
+X_train = pd.read_csv(zf.open('NUM10K_X_train_2021June_im.csv'))
+
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_test_2021June_im.zip") #NUM10K_X_test_2021June.zip
+X_test = pd.read_csv(zf.open('NUM10K_X_test_2021June_im.csv'))
+
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_train_2021June_im.zip") #NUM10K_y_train_2021June.zip
+y_train = pd.read_csv(zf.open('NUM10K_y_train_2021June_im.csv'))
+
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_test_2021June_im.zip") #NUM10K_y_test_2021June.zip
+y_test = pd.read_csv(zf.open('NUM10K_y_test_2021June_im.csv'))
+  
+X_test['RiskFactors']= X_test['RiskFactors'].apply(preprocess_text)
+X_train['RiskFactors']= X_train['RiskFactors'].apply(preprocess_text)
+
+#######################################################################################################################
+#1 text summarization of 10-K                                                                                         #
+#######################################################################################################################
+
+def get_sentence_embedding(text):
+    text = text.lower()
+    # Add the special tokens.
+    max_seq = 512
+    tokenized_text = tokenizer.tokenize(text)
+    if len(tokenized_text)>= max_seq-2:
+        marked_text = ['[CLS]'] + tokenized_text[:max_seq-2] + ['[SEP]']
+    else:
+        marked_text = ['[CLS]'] + tokenized_text + ['[SEP]'] 
+    indexed_tokens = tokenizer.convert_tokens_to_ids(marked_text)
+    # Mark each of the tokens as belonging to sentence "1".
+    segments_ids = [1] * len(marked_text)
+    tokens_tensor = torch.tensor([indexed_tokens])
+    segments_tensors = torch.tensor([segments_ids])
+    # Predict hidden states features for each layer
+    with torch.no_grad():
+        encoded_layers, _ = sen_model(tokens_tensor, segments_tensors)
+    # `token_vecs` is a tensor with shape [number of tokens x 768]
+    token_vecs = encoded_layers[-2][0]
+    # Calculate the mean of all token vectors.
+    sentence_embedding = torch.mean(token_vecs, dim=0)
+    return sentence_embedding
+    
+##get a matrix for a document. Every vector in the matrix is sentence embedding.
+def document_emb( text ): #text is tokenized sentences
+    DocumentEmbedding = torch.zeros(1,768)
+    for sentence in text :
+        SentEmbedding = torch.unsqueeze(get_sentence_embedding(sentence),0)
+        DocumentEmbedding = torch.cat((DocumentEmbedding,SentEmbedding),0)
+
+    DocumentEmbeddingArray = ad_array_text(DocumentEmbedding[1:,:])
+    return DocumentEmbeddingArray
+    
+##for each centroid get 5 sentences without duplication. 
+##get 5x20 sentences. 
+##get embedding matrix for every document,i.e., every company
+def MutipleCentroidEmbedding(sentences,distances,DocumentEmbeddingArray):  
+    sentences = numpy.array(sentences)
+    count = 0
+    sentences_chosen = []
+    embeddings_chosen = []
+    if len(sentences)< NumberofSentences*NumberofCentroids:
+      DocumentEmbeddingArray = np.pad(DocumentEmbeddingArray, ((0, NumberofSentences*NumberofCentroids - DocumentEmbeddingArray.shape[0]), (0, 0)), constant_values=0)
+      embeddings_chosen.append(DocumentEmbeddingArray)
+      sentences_chosen.append(sentences.tolist())
+    else:
+    ##for first centroid we got 5 sentences: NumberofSentences=5
+        indexes_chosen = np.argpartition(distances[0],NumberofSentences)[:NumberofSentences]
+        embeddings_chosen.append(DocumentEmbeddingArray[indexes_chosen])
+        sentences_chosen.append(sentences[indexes_chosen].tolist())
+        ##for the restcentroid we delete the senetences chosen repeatedly
+        for i in distances[1:]:
+          indexes_1 = np.argpartition(i,NumberofSentences)[:NumberofSentences].tolist()
+          ##find out the same index
+          same_ind = [x for x in indexes_1 if x in indexes_chosen]
+          indexes_chosen = list(set(indexes_chosen+indexes_1))
+          j = len(same_ind)
+          ##if existing repeated indexes, choose more indexes and delete repeated indexes
+          if j > 0 :
+              indexes_1 = np.argpartition(i,NumberofSentences+j)[:NumberofSentences+j].tolist() 
+              embeddings_chosen_pre = delete_sentence(DocumentEmbeddingArray,indexes_1,same_ind)
+              embeddings_chosen.append(embeddings_chosen_pre)
+              sentences_chosen.append(sentences[indexes_1].tolist())
+          else:
+              embeddings_chosen.append(DocumentEmbeddingArray[indexes_1])
+              sentences_chosen.append(sentences[indexes_1].tolist())
+    count = count+1
+    ##if the number of sentences is less than required number
+    embeddings_chosen = torch.tensor(embeddings_chosen).reshape((NumberofCentroids * NumberofSentences, 768))
+    embeddings_chosen = embeddings_chosen.unsqueeze(0).to(device) #shape[1, 40, 768]
+    summary = [' '.join(sentence) for sentence in sentences_chosen] # a list of 20 sentences for 20 centroids
+    return embeddings_chosen, summary
+    
+def delete_sentence(embedding_array,indexes_ch, same_indexes):
+    index_differ = [x for x in indexes_ch if x not in same_indexes]
+    embedding_array = embedding_array[index_differ]
+    return embedding_array
+    
+def mini_batches_1(XE, R1E, R2E, mini_batch_size = 3): 
+    ## Creating the mini-batches       
+    m = XE.shape[0]                  
+    mini_batches = []
+    num_complete_minibatches = math.floor(m/mini_batch_size)
+    ##permutation = list(np.random.permutation(m))
+    shuffled_XE = XE#[permutation,:]
+    shuffled_X1R = R1E#[permutation]
+    shuffled_X2R = R2E#[permutation]
+    for k in range(0, int(num_complete_minibatches)):
+        mini_batch_XE = shuffled_XE[k * mini_batch_size : (k+1) * mini_batch_size]
+        mini_batch_X1R = shuffled_X1R[k * mini_batch_size : (k+1) * mini_batch_size]
+        mini_batch_X2R = shuffled_X2R[k * mini_batch_size : (k+1) * mini_batch_size]
+        mini_batch = (mini_batch_XE, mini_batch_X1R,mini_batch_X2R)
+        mini_batches.append(mini_batch)
+    Lower = int(num_complete_minibatches * mini_batch_size)
+    Upper = int(m - (mini_batch_size * math.floor(m/mini_batch_size)))
+    if m % mini_batch_size != 0:
+        mini_batch_XE = shuffled_XE[Lower : Lower + Upper]   
+        mini_batch_X1R = shuffled_X1R[Lower : Lower + Upper]
+        mini_batch_X2R = shuffled_X1R[Lower : Lower + Upper]
+        mini_batch = (mini_batch_XE, mini_batch_X1R, mini_batch_X2R)
+        mini_batches.append(mini_batch)
+    return mini_batches
+    
+def Multiple_Centroid_Summarization(input_text_df, RF_text):
+    sum_dic={}
+    sentences = sent_tokenize(input_text_df)
+    DocEmbeddingArray = document_emb(sentences)
+    if len(sentences)< NumberofCentroids:
+        DocEmbeddingArray = np.pad(DocEmbeddingArray, ((0, NumberofCentroids - DocEmbeddingArray.shape[0]), (0, 0)), constant_values=0)
+    ##fit kmeans 
+    kmeans = KMeans(n_clusters=NumberofCentroids)
+    kmeans.fit(preprocessing.normalize(DocEmbeddingArray))
+    centroids = kmeans.cluster_centers_ #shape(20, 768) if 20 centroids
+    ##get the matrix with distances from data point to each centroid
+    cosdistances = pairwise_distances(centroids, DocEmbeddingArray, metric='cosine') #metric='euclidean'
+    MultipleVector, sum_dic['RF_summary'] = MutipleCentroidEmbedding(sentences, cosdistances, DocEmbeddingArray)
+    c = {}
+    c.update(sum_dic)
+    RF_text.append(c)
+    return(MultipleVector,RF_text)
+    
+##an example of spliting the large textual data into batches and then summarizing each document 
+
+NumberofCentroids = 20
+NumberofSentences = 5 #for each centroid
+
+dict_name_x = "x"
+dict_name_s = "setence summary"
+dict_name_y = "y"
+
+cik_df = ddf['cik'].ravel()
+input_text_df = ddf['RiskFactors'].ravel()
+Y_DF = ddf['Bankruptcy'].values.ravel()
+
+input_size = input_text_df.shape[0]
+mb_size = 100
+dict_name_c = "cik"
+num_minibatches = int(input_size / mb_size) 
+minibatches_1 = mini_batches_1(input_text_df,Y_DF,cik_df,mb_size)
+
+count = 0 
+for minibatch1 in minibatches_1:
+    print(count)
+    sent_emb_df = torch.zeros(1,NumberofCentroids * NumberofSentences,768).to(device)
+    RF_df = []
+    cik_DF = []
+    XE1,YE1,YE2 = minibatch1 
+    
+    for item in XE1:
+        x_sum, RF_df = Multiple_Centroid_Summarization(item, RF_df)
+        sent_emb_df = torch.cat((sent_emb_df,x_sum),0)
+        print(sent_emb_df.shape)
+        
+    ## save the summarization
+    data_dict_rf_padding_cos_xtrainN = {dict_name_c:YE2, dict_name_x:sent_emb_df[1:,:,:], dict_name_s:RF_df, dict_name_y: YE1}
+    pickle.dump(data_dict_rf_padding_cos_xtrainN,open("data_dict_rf_padding_cos_xtrainN_"+str(count)+".p","wb"))
+    files.download("data_dict_rf_padding_cos_xtrainN_"+str(count)+".p")
+  
+    count = count + 1
+
+#######################################################################################################################
+#2 feature extraction of 10-K via CNN                                                                                 #
+#######################################################################################################################
+
+class CNN(nn.Module):
+    def __init__(self, embed_num, embed_dim, class_num, kernel_num, kernel_sizes, dropout, static):
+        super(CNN, self).__init__()
+        V = embed_num
+        D = embed_dim
+        C = class_num
+        Co = kernel_num
+        Ks = kernel_sizes
+        
+        self.static = static
+        self.embed = nn.Embedding(V, D)
+        
+        self.convs1 = nn.ModuleList([nn.Conv2d(1, Co, (K, D)) for K in Ks])
+        for m in self.convs1:
+            torch.nn.init.xavier_uniform_(m.weight)
+        self.bn = nn.BatchNorm2d(num_features=Co, eps=1e-05, momentum=0.1,affine=True,track_running_stats=True)
+        self.dropout = nn.Dropout(dropout)
+        self.fc1 = nn.Linear(len(Ks) * Co, C)
+        torch.nn.init.xavier_uniform_(self.fc1.weight)##initial setting 
+        self.fc1.bias.data.fill_(0.01)##
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, x):
+        if self.static:
+            x = Variable(x)
+        x = x.unsqueeze(1)  # (N, Ci, W, D)
+        x = [self.bn(conv(x)) for conv in self.convs1]
+       
+        x = [torch.nn.functional.relu(j).squeeze(3) for j in x]  # [(N, Co, W), ...]*len(Ks) 
+  
+        x = [torch.nn.functional.max_pool1d(i, i.size(2)).squeeze(2) for i in x]  # [(N, Co), ...]*len(Ks)
+        x_E = torch.cat(x, 1)
+        x = self.dropout(x_E)  # (N, len(Ks)*Co)
+        logit = self.fc1(x)  # (N, C)
+        output = self.sigmoid(logit)
+        return output,x_E
+
+def generate_batch_data(x, y, batch_size):
+    i, batch = 0, 0
+    for batch, i in enumerate(range(0, len(x) - batch_size, batch_size), 1):
+        x_batch = x[i : i + batch_size]
+        y_batch = y[i : i + batch_size]
+        yield x_batch, y_batch, batch
+    if i + batch_size < len(x):
+        yield x[i + batch_size :], y[i + batch_size :], batch + 1
+    if batch == 0:
+        yield x, y, 1
+
+def ad_array_text(listArray):
+    list_item =[]
+    for item in listArray:
+        item = item.tolist()
+        list_item.append(item)
+        item=[]
+    Arraylist = np.array(list_item)
+    return Arraylist
+
+class EarlyStopping(object):
+    def __init__(self, mode='min', min_delta=0, patience=10, percentage=False):
+        self.mode = mode
+        self.min_delta = min_delta
+        self.patience = patience
+        self.best = None
+        self.num_bad_epochs = 0
+        self.is_better = None
+        self._init_is_better(mode, min_delta, percentage)
+
+        if patience == 0:
+            self.is_better = lambda a, b: True
+            self.step = lambda a: False
+
+    def step(self, metrics):
+        if self.best is None:
+            self.best = metrics
+            return False
+
+        if np.isnan(metrics):
+            return True
+
+        if self.is_better(metrics, self.best):
+            self.num_bad_epochs = 0
+            self.best = metrics
+        else:
+            self.num_bad_epochs += 1
+
+        if self.num_bad_epochs >= self.patience:
+            return True
+
+        return False
+
+    def _init_is_better(self, mode, min_delta, percentage):
+        if mode not in {'min', 'max'}:
+            raise ValueError('mode ' + mode + ' is unknown!')
+        if not percentage:
+            if mode == 'min':
+                self.is_better = lambda a, best: a < best - min_delta
+            if mode == 'max':
+                self.is_better = lambda a, best: a > best + min_delta
+        else:
+            if mode == 'min':
+                self.is_better = lambda a, best: a < best - (
+                            best * min_delta / 100)
+            if mode == 'max':
+                self.is_better = lambda a, best: a > best + (
+                            best * min_delta / 100)
+
+##training the cnn 
+embed_num = 512 ####512 embedings in one document
+embed_dim = 768 ####768 dimension
+class_num = 1 #### binary classification 
+kernel_num = 40 #####number of filters
+kernel_sizes = [1] ##### window size 
+dropout = 0.2
+static = True
+model = CNN(
+    embed_num=embed_num,
+    embed_dim=embed_dim,
+    class_num=class_num,
+    kernel_num=kernel_num,
+    kernel_sizes=kernel_sizes,
+    dropout=dropout,
+    static=static,
+)
+##send model to GPU
+model.to(device)
+##reset hyperparameters
+n_epochs = 50
+batch_size = 30
+lr = 0.0001
+optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.001)
+loss_fn = nn.BCELoss()
+
+train_losses, val_losses = [], []
+model.train(True)
+es = EarlyStopping(patience=10)
+for epoch in range(n_epochs):
+    start_time = time.time()
+    train_loss = 0    
+    for x_batch, y_batch, batch in generate_batch_data(x_train, y_train_1, batch_size):
+        y_pred = model(x_batch)[0]
+        optimizer.zero_grad()
+        loss = loss_fn(y_pred, y_batch.to(torch.float32))
+         
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()   
+    train_loss /= batch
+
+    if es.step(train_loss):
+        break
+    train_losses.append(train_loss)
+    elapsed = time.time() - start_time
+    model.eval()   
+    with torch.no_grad(): 
+        val_loss, batch = 0, 1
+        for x_batch, y_batch, batch in generate_batch_data(x_val, y_val_1, batch_size):
+            y_pred = model(x_batch)[0]
+            loss = loss_fn(y_pred, y_batch.to(torch.float32))
+            val_loss += loss.item()    
+        val_loss /= batch
+        val_losses.append(val_loss)
+        print(
+            "Epoch %d Train loss: %.2f. Validation loss: %.2f. Elapsed time: %.2fs."
+            % (epoch + 1, train_losses[-1], val_losses[-1], elapsed)
+            )
+
+## to match the data type 
+X_train_rf_cnn = model(x_train)[1].cpu()
+X_val_rf_cnn = model(x_val)[1].cpu()
+X_test_rf_cnn = model(x_test)[1].cpu()
+
+X_train_rf_cnn = ad_array_text(X_train_rf_cnn)
+X_test_rf_cnn = ad_array_text(X_test_rf_cnn)
+X_val_rf_cnn = ad_array_text(X_val_rf_cnn)
+
+X_train_rf_cnn = torch.from_numpy(X_train_rf_cnn).to(device)
+X_test_rf_cnn = torch.from_numpy(X_test_rf_cnn).to(device)
+X_val_rf_cnn = torch.from_numpy(X_val_rf_cnn).to(device)
+
