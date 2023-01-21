@@ -1,4 +1,4 @@
-## The code is run on colab
+## The code ran on colab
 ##
 from google.colab import drive
 drive.mount('/content/drive')
