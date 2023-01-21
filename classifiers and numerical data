@@ -507,10 +507,11 @@ DDF.loc[DDF.shape[0]]={'cik':1517498,'sic':5122}
 DDF['sic']=DDF['sic'].apply(sic_sec)
 df_nu = pd.merge(DDF, DF, on = 'cik', how = 'inner')
 df_nu = df_nu.drop(['date','fyear', 'cik'], axis = 1)
+df_nu = df_nu[df_nu['sic'] != 6] ##delete non classifiable
 
 ##2.2 creat balanced numerical data
 DF_0 = df_nu[df_nu['Bankruptcy'] == 0]
-DF_0 = DF_0.sample( n= 136,random_state = 123) 
+DF_0 = DF_0.sample( n= 173,random_state = 123) 
 DF_1 = df_nu[df_nu['Bankruptcy'] == 1]
 DFs = [DF_0,DF_1]
 DF_all = pd.concat(DFs, axis=0,ignore_index=True)# ignore the original index
