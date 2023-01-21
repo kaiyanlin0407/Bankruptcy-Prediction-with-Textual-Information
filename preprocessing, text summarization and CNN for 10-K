@@ -54,16 +54,16 @@ def preprocess_text(text):
   text = re.sub(r'\s+',' ',text)
   return text
   
-zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_train_2021June_im.zip") #NUM10K_X_train_2021June.zip
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_train_2021June.zip") #NUM10K_X_train_2021June.zip
 X_train = pd.read_csv(zf.open('NUM10K_X_train_2021June.csv'))
 
-zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_test_2021June_im.zip") #NUM10K_X_test_2021June.zip
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_X_test_2021June.zip") #NUM10K_X_test_2021June.zip
 X_test = pd.read_csv(zf.open('NUM10K_X_test_2021June.csv'))
 
-zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_train_2021June_im.zip") #NUM10K_y_train_2021June.zip
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_train_2021June.zip") #NUM10K_y_train_2021June.zip
 y_train = pd.read_csv(zf.open('NUM10K_y_train_2021June.csv'))
 
-zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_test_2021June_im.zip") #NUM10K_y_test_2021June.zip
+zf = zipfile.ZipFile("/content/drive/My Drive/data/NUM10K_y_test_2021June.zip") #NUM10K_y_test_2021June.zip
 y_test = pd.read_csv(zf.open('NUM10K_y_test_2021June.csv'))
   
 X_test['RiskFactors']= X_test['RiskFactors'].apply(preprocess_text)
