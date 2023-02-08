@@ -1,4 +1,4 @@
-## The code ran on colab
+## The code ran on colab.
 ##
 from google.colab import drive
 drive.mount('/content/drive')
@@ -225,7 +225,7 @@ def method_peformance(y_pred, y_prob):
             cutoff = threshold
     print('threshold:',cutoff)
     acc = accuracy_score(y_tested, y_pred)
-    return auc, best_f1, 'Recall {:.4f}'.format(recall_tr), precision_tr, acc_tr #,coverage
+    return auc, best_f1, 'Recall {:.4f}'.format(recall_tr), precision_tr, acc_tr 
 
 def result_produce(modes, modelname, Xtain, Ytrain, Xtest,clfier):
     perf_model = []
@@ -331,7 +331,7 @@ def grid_SVM(X_scaled_selected, y_train, test_x):
     y_pred, y_prob = svc.predict(test_x), svc.predict_proba(test_x)[:,-1] 
     auc, f1, recall, precision, acc = method_peformance(y_pred, y_prob)
     #joblib.dump(svc,"svc.pkl")
-    with open('svc_singleNum.pkl', 'wb') as files: #svc_singleNum.pkl #'svc_singleNumfakelr.pkl'
+    with open('svc_singleNum.pkl', 'wb') as files: 
        pickle.dump(svc, files)
     print("auc of training: %0.5f" % best_score)
     print( "Grid:", best_grid)
@@ -385,7 +385,7 @@ def create_network(learn_rate = 0.001, momentum=0.1): #, momentum=0, optimizer =
     network.add(layers.Dense(units=4, activation='relu'))  
     optimizer = SGD(lr=learn_rate, momentum=momentum)
     # Compile neural network 
-    network.compile(loss='binary_crossentropy', # Cross-entropy, optimizer=optimizer, # Optimizer
+    network.compile(loss='binary_crossentropy', 
                     optimizer=optimizer,
                     metrics = ['accuracy']) #  performance metric
     # Return compiled network
@@ -400,7 +400,7 @@ def grid_NN(Xtrain, Ytrain, test_x):
     learn_rate = [0.01,0.001,0.1,0.0001,0.00001]
     #momentum = [0.0, 0.2, 0.4]
 # Create hyperparameter options
-    param_grid = dict(learn_rate = learn_rate, epochs=epochs ) #momentum=momentum, batch_size=batches
+    param_grid = dict(learn_rate = learn_rate, epochs=epochs ) 
     estimator  = neural_network
 # Create grid search
     best_score = 0
@@ -514,7 +514,7 @@ DF_0 = df_nu[df_nu['Bankruptcy'] == 0]
 DF_0 = DF_0.sample( n= 173,random_state = 123) 
 DF_1 = df_nu[df_nu['Bankruptcy'] == 1]
 DFs = [DF_0,DF_1]
-DF_all = pd.concat(DFs, axis=0,ignore_index=True)# ignore the original index
+DF_all = pd.concat(DFs, axis=0,ignore_index=True)
 
 ##2.3 train set and test set = 8:2
 X_train, X_test, y_train, y_test = model_selection.train_test_split(DF_all.drop(['Bankruptcy'],axis = 1), DF_all['Bankruptcy'], test_size = 0.2,random_state=42)
@@ -534,7 +534,7 @@ for col in cols:
 ##2.5 deal with the columns with nan (fill nan with mean) in testing dataset
 cols = [col for col in X_test.columns if col not in['sic','cik']]
 X_test_na = X_test[cols].isna()
-X_test_mean = X_train.groupby(gp_col)[cols].mean() #use training dataset to deal with missing value
+X_test_mean = X_train.groupby(gp_col)[cols].mean() 
 for col in cols:
     na_series = X_test_na[col]
     names = list(X_test.loc[na_series,gp_col])     
@@ -560,7 +560,7 @@ for col in cols:
 ##2.7 deal with the columns with inf (fill inf with 10*maximum) in testing datset
 cols = [col for col in X_test.columns if col not in['sic','cik']]
 X_test_na = X_test[cols].isna()
-X_test_max = X_train.groupby(gp_col)[cols].max()*10 ##for test set, use the number from training dataset to fill
+X_test_max = X_train.groupby(gp_col)[cols].max()*10 
 for col in cols:
     na_series = X_test_na[col]
     names = list(X_test.loc[na_series,gp_col])     
@@ -584,7 +584,7 @@ for col in cols:
 ##2.9 deal with the -inf (fill inf with 10*minimum) in testing dataset
 cols = [col for col in X_test.columns if col not in['sic','cik']]
 X_test_na = X_test[cols].isna()
-X_test_min = X_train.groupby(gp_col)[cols].min()/10 ##for test set, use the number from training dataset to fill
+X_test_min = X_train.groupby(gp_col)[cols].min()/10 
 for col in cols:
     na_series = X_test_na[col]
     names = list(X_test.loc[na_series,gp_col])     
@@ -626,13 +626,13 @@ X_train_frsd = stad_set(X_train_fr) ####normalization and then standardization
 selected_vars = list(set(RF_feature(X_train_frsd,y_train,10)).union(set(log_feature(X_train_frsd, y_train, 10))).union(set(FR_feature(X_train_fr, y_train))))
 
 #4 normalize the numerical data except feature 'sic'
-scaler_c = MinMaxScaler().fit(X_train[selected_vars].drop(['sic'],axis = 1)) #scaler_c = MinMaxScaler().fit(X_train_nu[selected_vars].drop(['sic'],axis = 1)) #
+scaler_c = MinMaxScaler().fit(X_train[selected_vars].drop(['sic'],axis = 1)) 
 X_train_nu = produce_normalized(X_train[selected_vars],scaler_c) #X_val_nu = produce_normalized(X_val[selected_vars],scaler_c)
 X_test_nu = produce_normalized(X_test[selected_vars],scaler_c)
 
 #5 training classifiers
-scoring = "accuracy" #'roc_auc' #"accuracy" #"f1"
-modes = ['Original'] ##,'simple undersample', 'simple oversample', 'SMOTE'
+scoring = "accuracy" 
+modes = ['Original'] 
 Xtrain = X_train_nu
 Ytrain = y_train
 Xtest = X_test_nu
@@ -685,3 +685,5 @@ repeat = 100
 with open('nn_singleNum.pkl', 'rb') as f:
     method = pickle.load(f)
 RepeatedNN = RepeatedCVEvaluation(X,y, method)
+
+
