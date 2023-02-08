@@ -57,23 +57,14 @@ def translator(user_string):
 
 ##clean the data
 def clean_txt(text):
-    #lowercase
-    #text = text.lower()
-    #lemmatized #stemmed
     text = text.split()
     s = [lemmatizer.lemmatize(word=word,pos='v') for word in text]
     s = [porter_stemmer.stem(word=word) for word in s]
     str1 = " "  
     text = str1.join(s)
-       
-    # remove html markup
-    text=re.sub("(<.*?>)","",text)
-   
-    #remove non-ascii and digits
-    text=re.sub("(\\W|\\d)"," ",text)
-    
-    #remove whitespace
-    text=text.strip()
+    text=re.sub("(<.*?>)","",text) # remove html markup
+    text=re.sub("(\\W|\\d)"," ",text) #remove non-ascii and digits
+    text=text.strip() #remove whitespace
     return text
     
 def calculateTFIDF(corpus, topN):
@@ -101,10 +92,9 @@ def get_word_embedding(text):
     segments_tensors = torch.tensor([segments_ids])
     # Predict hidden states features for each layer
     with torch.no_grad():
-        o = sen_model(tokens_tensor, segments_tensors, output_hidden_states=True) #encoded_layers, _
-    # `token_vecs` is a tensor with shape [number of tokens x 768]
-    token_vecs = o.hidden_states[-1] + o.hidden_states[1]
-    #print(token_vecs.shape)
+        o = sen_model(tokens_tensor, segments_tensors, output_hidden_states=True) 
+    token_vecs = o.hidden_states[-1] + o.hidden_states[1] #token_vecs is a tensor with shape [number of tokens x 768]
+    
     #Calculate the mean of all token vectors.
     word_embedding = torch.mean(torch.squeeze(token_vecs), dim=0)
     print(word_embedding.shape)
@@ -155,7 +145,7 @@ topN = 25
 sum_dic={}
 count = 0
 
-for text in X_test['summary']:
+for text in X_test['summary']: #repeat this step for X_train['summary']
  
     print(count)
     sum_dic['cik'] = X_test['cik'].loc[count]
