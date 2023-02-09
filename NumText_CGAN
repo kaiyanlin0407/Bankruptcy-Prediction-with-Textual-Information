@@ -146,24 +146,7 @@ class Generator(nn.Module):
           x_combined = torch.cat((x2,x1),dim=1) # numerical data is located above textul data 
           output = self.main(x_combined)
           return output
-
-class Extractor(nn.Module):
-    def __init__(self):
-        super(Extractor, self).__init__()
-        Z1_dim = 40 #number of features of numerical data
-        h1_dim = int(numerical_size/4) 
-        h22_dim = int(numerical_size/2)
-        out_dim = int(numerical_size)
-        X2_dim = int(numerical_size/2)
-        X3_dim = int(numerical_size/4)
-        X4_dim = 40
         
-        self.extractor = nn.Sequential(nn.Linear(Z1_dim, h1_dim),nn.ReLU(),nn.Linear(h1_dim, h22_dim),nn.ReLU(),nn.Linear(out_dim, X2_dim),nn.ReLU(),nn.Linear(X2_dim, X3_dim),nn.ReLU(),nn.Linear(X3_dim, X4_dim),nn.ReLU())   #,nn.BatchNorm1d(h22_dim)    
-        
-    def forward(self, input_pre): # condition: sentence embeddings #input_pre: numerical data             
-        out = self.extractor(input_pre)    
-        return out
-       
 
 class Discriminator(nn.Module):
     def __init__(self):
@@ -227,11 +210,10 @@ class AE_wide(nn.Module):
         activation = self.decoder_hidden_layer_2(activation)
         activation = torch.relu(activation)
         activation = self.decoder_output_layer_3(activation)
-        
-
+    
         reconstructed = torch.relu(activation)
-
         return reconstructed.float(),code_Y.float()
+        
 def seed_everything(seed: int):
     
     random.seed(seed)
@@ -453,7 +435,7 @@ for it in range(epoch):
         #noise
         noise =  Variable(torch.randn((Batch_Size,noise_size)).to(device)) #XE2.shape[1] #XE1 #N(0,1)
 
-#################  Train Discriminator  #################
+        ##########  Train Discriminator  #################
 
         optimizer_D.zero_grad()
 
@@ -480,10 +462,7 @@ for it in range(epoch):
         optimizer_D.step()
 
 
-#################  Train Generator  #################
-
-
-        
+       ##########  Train Generator  #################   
         # Loss measures generator's ability to fool the discriminator
         g_loss_fake = adversarial_loss(discriminator(XE2.to(dtype = torch.double),gen_x.to(dtype = torch.double))[0], valid.to(dtype = torch.double))
         l2 = loss_func(discriminator(XE2.to(dtype = torch.double),gen_x.to(dtype = torch.double))[1], YE1.view(-1,1).double())#
@@ -509,7 +488,7 @@ for it in range(epoch):
         fake = Variable(torch.zeros((Batch_Size,1)).to(device), requires_grad=False)
         noise = Variable(torch.randn((Batch_Size, noise_size)).to(device)) #X_val_rf_cnn.shape[1]
 
-################  loss of Discriminator #########################
+        ##########  loss of Discriminator #########################
 
         # Loss for real : numerical + y
         x_extented = test_initial #extractor(x_test_nu)
