@@ -685,5 +685,127 @@ repeat = 100
 with open('nn_singleNum.pkl', 'rb') as f:
     method = pickle.load(f)
 RepeatedNN = RepeatedCVEvaluation(X,y, method)
+################################################################################################################################################
+## NN for MD&A+Num, RiFa+Num, Num+MD&A, Num+RiFa, MD&A+RiFa and RiFa+MD&A are decided by adopting the Optuna package                         ##
+## After getting the hyperparameters of the best trial, then we can build networks according to the hyperparameters and repeat 5.4#############
+
+!pip install optuna
+import optuna
+
+EPOCHS = 500
+CLASSES = 1
+N_VAL_EXAMPLES = 45
+N_TRAIN_EXAMPLES = 113
+BATCHSIZE = 32
+DIR = os.getcwd()
+LOG_INTERVAL = 10
+
+numberTrials = 100
+inputFeatures = 1*40
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.kaiming_normal_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
+        m.bias.data.fill_(0.01)
+def define_model(trial):
+  #optimize the number of layers, hidden units and drop-out ratio in each layer
+  n_layers = trial.suggest_int("n_layers",5,20)
+  layers= []
+
+  in_features = inputFeatures
+  for i in range(n_layers):
+    out_features = trial.suggest_int("n_units_l{}".format(i), 5, 1024)
+    layers.append(nn.Linear(in_features, out_features))
+    layers.append(nn.ReLU())
+    p = trial.suggest_float("dropt_l{}".format(i),0.3,0.7)
+    layers.append(nn.Dropout(p))
+
+    in_features=out_features
+  layers.append(nn.Linear(in_features, CLASSES))
+  layers.append(nn.Sigmoid())#LogSoftmax(dim=1))
+  net = nn.Sequential(*layers)
+  net.apply(init_weights)
+  return net#nn.Sequential(*layers)
+
+def objective(trial):
+    model = define_model(trial).to(device)
+    # Generate the optimizers.
+    optimizer_name = trial.suggest_categorical("optimizer", ["SGD","Adam"])#"RMSprop"
+    lr = trial.suggest_float("lr", 1e-5, 1e-1)
+    weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-1)
+    momentum= trial.suggest_float("momentum", 0.5,0.9)
+    optimizer = getattr(optim, optimizer_name)(model.parameters(), lr=lr, weight_decay=weight_decay )
+    
+
+    # Training of the model.
+    model.train()
+    # Training of the model.
+    for epoch in range(EPOCHS):
+        model.train()
+        for batch_idx, (data, target) in enumerate(train_loader):
+            # Limiting training data for faster epochs.
+            if batch_idx * BATCHSIZE >= N_TRAIN_EXAMPLES:
+                break
+
+            data, target = data.view(data.size(0), -1).to(device), target.to(device)
+
+            optimizer.zero_grad()
+            output = model(data.float())
+            loss = nn.BCELoss()#F.nll_loss(output, target)
+            l = loss(output.float(), target.float())
+            l.backward()
+            optimizer.step()
+
+     
+        model.eval()
+        correct = 0
+        with torch.no_grad():
+            for batch_idx, (data, target) in enumerate(val_loader):
+                # Limiting validation data
+                if batch_idx * BATCHSIZE >= N_VAL_EXAMPLES:
+                    break
+                data, target = data.view(data.size(0), -1).to(device), target.to(device)
+                output = model(data.float())
+
+                val_loss = loss(output.float(), target.float())
+       
+                # Get the index of the max log-probability
+                pred = (output>0.5).float() 
+                correct += pred.eq(target.view_as(pred)).sum().item()
+
+        accuracy = correct / min(len(val_loader.dataset), N_VAL_EXAMPLES)
+        #if es.step(val_loss):
+        #    break
+        trial.report(accuracy, epoch)
+        
+        # Handle pruning based on the intermediate value.
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
+
+    return accuracy
 
 
+
+train_data = []
+test_data = []
+for i in range(len(X_train_rf_cnn)):
+   train_data.append([X_train_rf_cnn[i], y_b_train_rf[i]])
+for i in range(len(X_val_rf_cnn)):
+   test_data.append([X_val_rf_cnn[i], y_b_val_rf[i]])
+
+train_loader = torch.utils.data.DataLoader(train_data, shuffle=True, batch_size=BATCHSIZE)
+val_loader = torch.utils.data.DataLoader(test_data, shuffle=True, batch_size=BATCHSIZE)
+if __name__ == "__main__":
+
+    study_name = 'NN_singleRF_optuna_study'   # Make the sampler behave in a deterministic way.
+    study = optuna.create_study(study_name=study_name, direction="maximize") 
+    study.optimize(objective, n_trials=numberTrials, timeout=600, gc_after_trial=True)
+    
+    print("Study statistics: ")
+    print("  Number of finished trials: ", len(study.trials))
+    print("Best trial:")
+    trial = study.best_trial
+    print("  Value: ", trial.value)
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
